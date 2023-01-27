@@ -16,7 +16,6 @@ fi
 if touch $writefile
 	then
 		echo "$writestr" > $writefile
-#		echo "file name $1, content written $2"
 		exit 0
 	else
 		echo "file could not be created"
