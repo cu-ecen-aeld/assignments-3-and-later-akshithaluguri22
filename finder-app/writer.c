@@ -6,42 +6,44 @@
 #include <unistd.h>
 #include <string.h>
 
-
-int fd,error;
-
 int main(int argc , char *argv[]){
 	
 	openlog(NULL, 0, LOG_USER);
+	syslog(LOG_DEBUG, "Opened Log.");
 	
-	if(argc!=3){
-		printf("Invalid number of arguments, Please enter required 2 arguments (<filename> <write string>)");
-		syslog(LOG_ERR,"Invalid number of arguments");
+	
+	if(argc != 3){
+		printf("Invalid number of arguments, Please enter required 2 arguments (<filename> <write string>).\n\r");
+		syslog(LOG_ERR,"Invalid number of arguments.");
 		return 1;
 	}
 	
-	fd=0;
 	
-	fd=open(argv[1], O_WRONLY | O_CREAT ,S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH);
+	int fd=open(argv[1], O_WRONLY | O_CREAT ,S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH);
 
-	if(fd==-1){
-		syslog(LOG_ERR,"File not avaliable");
+	if(fd == -1){
+		syslog(LOG_ERR,"The file %s is not avaliable or created.", argv[1]);
 		return 1;
 	}
 	
-	error=write(fd,argv[2],strlen(argv[2]));
+	int error = write(fd,argv[2],strlen(argv[2]));
 	
-	if(error== -1){
-		syslog(LOG_ERR,"coudnt write to the given file");
+	if(error == -1){
+		syslog(LOG_ERR,"Coudnt write %s to the given file %s.", argv[2], argv[1]);
 		return 1;
 	}
 	
 	if (error != strlen(argv[2])){
-		syslog(LOG_ERR, "partial string is wrriten into the file");
+		syslog(LOG_ERR, "partial string is written into the file. written bytes=%d, total bytes=%ld.",error,strlen(argv[2]));
 		return 1;
 	}
 	
+	syslog(LOG_DEBUG, "Wrote %s to %s.", argv[2], argv[1]);
+	
 	close(fd);
+	
+	syslog(LOG_DEBUG, "Closing Log.");
 	closelog();
-	return 0;
-;	
+	
+	return 0;	
 }

@@ -58,7 +58,6 @@ fi
 
 for i in $( seq 1 $NUMFILES)
 do
-	echo "using gcc build writer"
 	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
