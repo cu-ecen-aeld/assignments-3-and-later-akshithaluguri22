@@ -8,9 +8,8 @@
 
 int main(int argc , char *argv[]){
 	
+
 	openlog(NULL, 0, LOG_USER);
-	syslog(LOG_DEBUG, "Opened Log.");
-	
 	
 	if(argc != 3){
 		printf("Invalid number of arguments, Please enter required 2 arguments (<filename> <write string>).\n\r");
@@ -38,11 +37,10 @@ int main(int argc , char *argv[]){
 		return 1;
 	}
 	
-	syslog(LOG_DEBUG, "Wrote %s to %s.", argv[2], argv[1]);
+	syslog(LOG_DEBUG, "Wrote %s to file %s.", argv[2], argv[1]);
 	
 	close(fd);
 	
-	syslog(LOG_DEBUG, "Closing Log.");
 	closelog();
 	
 	return 0;	
