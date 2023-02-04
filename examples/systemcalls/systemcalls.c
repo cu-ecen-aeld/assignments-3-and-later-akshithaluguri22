@@ -16,6 +16,9 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+	if(system(cmd)!=0 || cmd==NULL){
+		return false;
+	}
 
     return true;
 }
@@ -49,6 +52,7 @@ bool do_exec(int count, ...)
     // and may be removed
     command[count] = command[count];
 
+
 /*
  * TODO:
  *   Execute a system command by calling fork, execv(),
@@ -58,9 +62,38 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
-
+	int status;
+	pid_t child_pid;
+	
+	child_pid= fork();
+	
+	if (child_pid == -1 )
+		return false;
+		
+	if(child_pid == 0){ //child 
+		if(execv(command[0],command)==-1)
+			exit(EXIT_FAILURE);
+	}
+	else{
+		if(waitpid(child_pid,&status,0)==-1){
+			return false;
+		}
+	
+		if(WIFEXITED(status))
+		{
+			if(WEXITSTATUS(status)!=0)
+			{
+				return false;
+			}
+	
+		}
+		else
+		{
+			return false;
+		}
+	}
+	
     va_end(args);
-
     return true;
 }
 
@@ -92,6 +125,43 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+
+	pid_t child_pid;
+	int statusw;
+	int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+	if (fd < 0) { 
+		return false; 
+		}
+	switch (child_pid = fork()) 
+	{
+  	case -1: 
+  		return false;
+  	case 0:
+    		if (dup2(fd, 1) < 0) { 
+    			return false; 
+    			}
+    		if(execv(command[0],command)==-1)
+		exit(EXIT_FAILURE);
+  	default:
+    		/* do whatever the parent wants to do. */
+    		if(waitpid(child_pid,&statusw,0)==-1){
+			return false;
+		}
+	
+		if(WIFEXITED(statusw))
+		{
+			if(WEXITSTATUS(statusw)!=0)
+			{
+				return false;
+			}
+	
+		}
+		else
+		{
+			return false;
+		}
+	}
+    close(fd);
 
     va_end(args);
 
