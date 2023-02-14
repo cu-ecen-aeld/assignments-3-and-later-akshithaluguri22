@@ -1,9 +1,9 @@
 CROSS_COMPILE=
-NATIVE_COMPILER=gcc
+CC=gcc
 FLAGES= -Wall -Werror
 
 all:
-	$(CROSS_COMPILE)$(NATIVE_COMPILER) writer.c -o writer $(FLAGES)
+	$(CROSS_COMPILE)$(CC) writer.c -o writer $(FLAGES)
 
 clean:
 	rm -f *.o writer
