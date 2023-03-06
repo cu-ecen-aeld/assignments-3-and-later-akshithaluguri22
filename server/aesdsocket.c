@@ -12,29 +12,244 @@
 #include <signal.h>
 #include <netdb.h>
 #include <syslog.h>
+#include <pthread.h>
+#include <time.h>
 
 #define PORT ("9000")
 #define TEMP_BUFFER_SIZE (3)
 #define AESDSOCKET_FILEPATH ("/var/tmp/aesdsocketdata")
 
 int server_socket_fd, client_socket_fd, aesdsocketdata_fd;
-char *recieved_packets;
+bool closed_flag = false;
+bool elapsed_10sec = false;
+timer_t timer;
+pthread_mutex_t mutex;
+
+typedef struct 
+{
+    pthread_t threadid;
+    int client_str_fd;
+    struct sockaddr_in client_str_address;
+    bool thread_status;
+} THREAD_DATA;
+
+typedef struct ll_node
+{
+    THREAD_DATA tdata;
+    struct ll_node *next;
+} NODE;
+
+int init_timer(void){
+
+    int status= timer_create(CLOCK_REALTIME, NULL, &timer);
+    
+    if(-1 == status){
+    	return status;
+    }
+    
+    struct itimerspec d_10;
+
+    d_10.it_value.tv_sec = 10;
+    d_10.it_value.tv_nsec = 0;
+    d_10.it_interval.tv_sec = 10;
+    d_10.it_interval.tv_nsec = 0;
+
+    status = timer_settime(timer, 0, &d_10, NULL);
+    
+    if(-1 == status){
+    	return status;
+    }
+    
+    return 0;
+}
+
+
+void timer_10_sec(void)
+{
+    time_t timestamp;
+    char buffer[50];
+
+    struct tm* tmp;
+
+    time(&timestamp);
+    tmp = localtime(&timestamp);
+
+    strftime(buffer, sizeof(buffer), "timestamp: %a, %d %b %Y %T %z\n", tmp);
+
+    lseek(aesdsocketdata_fd, 0, SEEK_END);
+
+    pthread_mutex_lock(&mutex);
+    
+    write(aesdsocketdata_fd, buffer, strlen(buffer));
+    
+    pthread_mutex_unlock(&mutex);
+
+}
+
+int node_insert( NODE **head, NODE *new_thread)
+{
+    if( new_thread == NULL )
+    {
+        return -1;
+    }
+    new_thread->next = *head;
+    *head =  new_thread;
+    return 0;
+}
 
 void signal_handler(int signum)
 {
     	if (SIGINT == signum || SIGTERM == signum) {
     		syslog(LOG_DEBUG, "SIGINT or SIGTERM signal received\n");
 		printf("SIGINT or SIGTERM occured\n");
+		closed_flag = true;
+    	}
+    	else if(signum == SIGALRM)
+    	{
+        	syslog(LOG_DEBUG, "SIGALRM signal recevied\n");
+        	elapsed_10sec = true;
     	}
 
-	close(server_socket_fd);
-	close(client_socket_fd);
-	close(aesdsocketdata_fd);
-	unlink(AESDSOCKET_FILEPATH);
-	closelog();
-	exit(0);
 }
 
+void cleanup()
+{
+    close(server_socket_fd);
+    close(aesdsocketdata_fd);
+    unlink(AESDSOCKET_FILEPATH);
+    pthread_mutex_destroy(&mutex);
+    timer_delete(timer);
+    closelog();
+    exit(0);
+}
+
+void *new_thread_fn( void *t_parameters )
+{
+    THREAD_DATA *t_data = (THREAD_DATA *) t_parameters;
+    char address_string[20];
+    const char *client_ip;
+    struct sockaddr_in *p = (struct sockaddr_in *)&t_data->client_str_address;  
+    char temp_buffer[TEMP_BUFFER_SIZE];
+    int packet_size;
+    bool packet_received  = false;
+    int count = 0;
+    int recv_buff_len = 0;
+    int prev_len = TEMP_BUFFER_SIZE;
+    char *recieved_packets;
+    int status=0;
+    
+    client_ip = inet_ntop(AF_INET, &p->sin_addr, address_string, sizeof(address_string));
+    syslog(LOG_DEBUG, "Connected with %s\n\r",client_ip ); 
+     
+    memset(temp_buffer, '\0', TEMP_BUFFER_SIZE);
+    
+    while( false == packet_received )
+    {
+    	int i=0;
+        packet_size = 0;
+
+        if( -1 == recv(t_data->client_str_fd, &temp_buffer, TEMP_BUFFER_SIZE, 0))
+        {
+            syslog(LOG_ERR, "recv ");
+        }
+        
+        while(i< TEMP_BUFFER_SIZE)
+        {
+	       packet_size++;
+        	 if( '\n' == temp_buffer[i] )
+        	 {
+           		     packet_received = true;
+             		     break;
+        	 }
+         i++;
+        }
+
+        if(count != 0)
+        {
+            char *ptr = realloc(recieved_packets, prev_len+packet_size);
+            if(ptr != NULL)
+            {
+                recieved_packets = ptr;
+                prev_len  += packet_size;
+                
+            }
+            else
+            {
+                syslog(LOG_ERR, "realloc failed");
+                
+            }
+            recv_buff_len  = prev_len ;
+        }
+        else
+        {
+            recieved_packets = (char *)malloc(packet_size);
+            if(recieved_packets == NULL)
+            {
+                syslog(LOG_ERR, "malloc failed");
+            }
+
+            memset(recieved_packets, '\0', packet_size);
+            recv_buff_len  = packet_size;
+            
+        }
+        memcpy((count * TEMP_BUFFER_SIZE) + recieved_packets, temp_buffer, packet_size);
+        count++;
+    }
+
+    lseek(aesdsocketdata_fd, 0, SEEK_END);
+
+    status = pthread_mutex_lock(&mutex);
+    if( status != 0 )
+    {
+        perror("mutex lock");
+    }
+    status= write(aesdsocketdata_fd, recieved_packets, recv_buff_len );
+    if( -1 == status)
+    {
+        syslog(LOG_ERR, "write failed\n");
+        printf("write failed\n");
+    }
+    memset(temp_buffer, '\0', TEMP_BUFFER_SIZE);
+    lseek(aesdsocketdata_fd, 0, SEEK_SET);
+    
+    int read_bytes;
+    char *recv_buffer = (char *)malloc(TEMP_BUFFER_SIZE);
+
+    if (NULL == recv_buffer) {
+        syslog(LOG_ERR, "not able to allocate memory");
+        printf("not able to allocate memory\n");
+    }
+    
+    while( (read_bytes = read(aesdsocketdata_fd, recv_buffer, TEMP_BUFFER_SIZE))>0)
+    {
+
+        int bytes_sent = send(t_data->client_str_fd, recv_buffer, read_bytes, 0);
+
+        if (bytes_sent == -1) 
+        {
+            syslog(LOG_ERR, "send");
+            break;
+        }
+    }
+    status = pthread_mutex_unlock(&mutex);
+    if( status!=0 )
+    {
+        syslog(LOG_ERR, "mutex unlock failed");
+    }
+    
+    if(read_bytes == -1)
+    {
+        syslog(LOG_ERR, "read failed");
+        printf("read failed\n");
+    }
+    
+    free(recv_buffer);
+    free(recieved_packets);
+    close(t_data->client_str_fd);
+    t_data->thread_status = true;
+    syslog(LOG_DEBUG, "Closed with %s\n\r",client_ip ); 
+    return 0;
+}
 int main(int argc, char *argv[]){
 
 	bool daemon_process=false;
@@ -44,11 +259,6 @@ int main(int argc, char *argv[]){
     	struct addrinfo *server_info;
     	int status;	
     	int enable = 1;	
-	char temp_buffer[TEMP_BUFFER_SIZE];
-    	int packet_size;
-    	int file_size = 0;	
-        char address_string[20];
-        const char *client_ip;	
         
 	//open syslog
 	openlog(NULL, 0, LOG_USER);
@@ -71,11 +281,12 @@ int main(int argc, char *argv[]){
 		syslog(LOG_ERR, "not able to open file %s",AESDSOCKET_FILEPATH);
 		return -1;
 	}
-		
+
 	//signal handlers
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
-	
+	signal(SIGALRM, signal_handler);
+
 
 	//hints
     	memset(&hints, 0, sizeof(hints));    
@@ -106,6 +317,10 @@ int main(int argc, char *argv[]){
     		printf("Error : setsockopt\n");
     	}
     	
+    	int flags = fcntl(server_socket_fd, F_GETFL);
+    	fcntl(server_socket_fd, F_SETFL, flags | O_NONBLOCK);
+    
+    	
 	//binding
 	status= bind(server_socket_fd,server_info->ai_addr,server_info->ai_addrlen);
 	if ( status != 0){
@@ -132,116 +347,78 @@ int main(int argc, char *argv[]){
 	freeaddrinfo(server_info);
 	addr_size = sizeof Client_addr;
 	
-	while(1){
+ 	status= init_timer();
+    	if(status == -1)
+    	{
+    	    perror("timer init failed");
+    	}
 	
-	        int count = 0;
-        	int recv_buff_len = 0;
-        	int prev_len = TEMP_BUFFER_SIZE;
-        	bool packet_received = false;
+    	pthread_mutex_init(&mutex, NULL);
+	
+    	NODE *head =NULL;
+    	NODE *prev,*current;
+    
+	while(!closed_flag)
+	{
+		if(elapsed_10sec)
+        	{
+            		elapsed_10sec = false;
+            		timer_10_sec();
+        	}
+        	
 		status=0;
 		
 		//accept
 		client_socket_fd= accept(server_socket_fd, (struct sockaddr *)&Client_addr, &addr_size);
 	 	if(client_socket_fd == -1 )
 	 	{
+	 	            if(errno == EWOULDBLOCK)
+           		     {
+                		continue;
+            		     }
             		syslog(LOG_ERR, "Client connection failed");
-            		return -1;
+            		continue;
         	}
-        
-		//for client_ip
-               client_ip = inet_ntop(AF_INET, &Client_addr.sin_addr, address_string, sizeof(address_string));
-        	syslog(LOG_DEBUG, "Connected with %s\n\r",client_ip );
-        	
-		memset(temp_buffer, '\0', TEMP_BUFFER_SIZE);
+        	NODE *new_thread = (NODE *)malloc(sizeof(NODE));
+        	new_thread->tdata.thread_status = false;
+        	new_thread->tdata.client_str_fd= client_socket_fd;
+        	new_thread->tdata.client_str_address = Client_addr;        
 
-        	while( false == packet_received )
-        	{
-            		int i=0;
-            		packet_size = 0;
-            		            			
-            		if(-1 == recv(client_socket_fd, &temp_buffer, TEMP_BUFFER_SIZE, 0)){
-                		syslog(LOG_ERR, "recv failed");
-            		}
-      		      		
-            		while(i< TEMP_BUFFER_SIZE)
-            		{
-		                packet_size++;
-               		 if( '\n' == temp_buffer[i] )
-               		 {
-               		     packet_received = true;
-               		     break;
-               		 }
-               		 i++;
-            		}
+		pthread_create( &(new_thread->tdata.threadid), NULL, &new_thread_fn, &(new_thread->tdata));
 
-            		if(count != 0)
-            		{
-                		char *ptr = realloc(recieved_packets, prev_len+packet_size);
-                		if(ptr != NULL)
-                		{
-                 		 	recieved_packets = ptr;
-                  		 	prev_len += packet_size;                    			
-                		}
-                		else
-                		{
-                			syslog(LOG_ERR, "realloc failed");
-
-                		}
-             			recv_buff_len = prev_len;
-             			
-            		}
-            		else
-            		{
-            		        recieved_packets = (char *)malloc(packet_size);
-                		if(NULL == recieved_packets)
-                		{
-                    			syslog(LOG_ERR, "malloc failed");
-                		}
-                		
-          			memset(recieved_packets, '\0', packet_size);
-                		recv_buff_len = packet_size;
-
-            		}
-            		
-        		memcpy((count * TEMP_BUFFER_SIZE) + recieved_packets, temp_buffer, packet_size);
-        		count++;
-        		}
-
-        		lseek(aesdsocketdata_fd, 0, SEEK_END);
-        		
-        		status= write(aesdsocketdata_fd, recieved_packets, recv_buff_len);
-        		if( -1 == status)
+        	node_insert(&head, new_thread);
+    	}
+    	
+    	current =  head;
+    	prev = head;		
+	    	
+    	while(current)
+    	{
+    		if(current->tdata.thread_status == true){
+        		if(current != head)
         		{
-        		    syslog(LOG_ERR, "write failed");
-        		    printf("write failed\n");
+            			prev->next = current->next;
+            			current->next = NULL;
+            			pthread_join(current->tdata.threadid, NULL);
+            			free(current);
+            			current = prev->next;
+	
         		}
-        		file_size += status;
-        		free(recieved_packets);
-        		memset(temp_buffer, '\0', TEMP_BUFFER_SIZE);
-        		lseek(aesdsocketdata_fd, 0, SEEK_SET);
+        		else if (current == head)
+        		{ 
+            			head = current->next;
+            			pthread_join(current->tdata.threadid, NULL);
+            			free(current);
+            			current = head;	
 
-        		char *recv_buffer = (char *)malloc(file_size);
-
-        		if (NULL == recv_buffer) {
-        			syslog(LOG_ERR, "not able to allocate memory");
-         		   	printf("not able to allocate memory\n");
         		}
-
-        		status = read(aesdsocketdata_fd, recv_buffer, file_size);
-        		if (-1 == status ){
-        		   syslog(LOG_ERR, "read failed");
-        		   printf("read failed\n");
-        		}
-
-        		status= send(client_socket_fd, recv_buffer, file_size, 0);
-        		if ( -1 == status) {
-        		syslog(LOG_ERR, "send failed");
-        		    printf("send failed\n");
-        		}
-
-        		free(recv_buffer);
-        		syslog(LOG_DEBUG, "Connection closed %s\n",client_ip);
-
-    		}
-    return 0;
+        	}
+        	else 
+        	{
+        		prev = current;
+        		current = current->next;
+        	}
+    	}
+        cleanup();	
+		 
 }

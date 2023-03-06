@@ -6,7 +6,7 @@ SRC = aesdsocket.c
 OUTPUT = aesdsocket
 
 all:
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(OUTPUT) $(SRC) 
+	$(CC) $(CFLAGS) -o $(OUTPUT) $(SRC) $(LDFLAGS)
 
 clean:
 	-rm -f *.o $(OUTPUT) *.elf *.map
