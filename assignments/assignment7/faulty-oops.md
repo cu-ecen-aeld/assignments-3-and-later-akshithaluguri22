@@ -62,3 +62,19 @@ buildroot login:
 - The eroor shows where the process has failed in the last section. Here we can know thet the process Id was 159, and the command was 'sh'.
 - In the call trace we can see that the error occured due to an error while doing a faulty_write.
 - The error occurred at byte offset 0x14 which is 20bytes in a function of 0x20 or 32 bytes long.
+
+##Objdump:
+
+```
+0000000000000000 <faulty_write>:
+   0:   d503245f        bti     c
+   4:   d2800001        mov     x1, #0x0                        // #0
+   8:   d2800000        mov     x0, #0x0                        // #0
+   c:   d503233f        paciasp
+  10:   d50323bf        autiasp
+  14:   b900003f        str     wzr, [x1]
+  18:   d65f03c0        ret
+  1c:   d503201f        nop
+  
+```
+- As it says that the error happend at 0x14 that means it has happened at the instruction str wzr,[x1].
