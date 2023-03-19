@@ -62,7 +62,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
      * TODO: handle read
      */
      
-    mutex_lock(&aesd_device.lock);
+    mutex_lock(&aesd_device.mtx_lock);
     entry_buff = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->c_buff, *f_pos, &offs);
     
     if( entry_buff == NULL )
@@ -92,39 +92,40 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     exit : 
     
-   	mutex_unlock(&aesd_device.lock);
+   	mutex_unlock(&aesd_device.mtx_lock);
     
     return ret;
 }
 
-ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
-                loff_t *f_pos)
+ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
-    ssize_t ret = 0;
-    char *tmp_buf;
-    bool packet_flag = false;
-    struct aesd_dev *dev= filp->private_data;
     int packet_len = 0;
-    struct aesd_buffer_entry entry_buff;
-    char *ret_entry;
     int i=0;
+    ssize_t ret = 0;
+    bool packet_flag = false;
+    char *ret_entry;
+    char *tmp_buf;
+    struct aesd_dev *dev= filp->private_data;
+    struct aesd_buffer_entry entry_buff;
+
     
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     
-    mutex_lock(&aesd_device.lock);
+    mutex_lock(&aesd_device.mtx_lock);
 
     tmp_buf = (char *)kmalloc(count, GFP_KERNEL);
+    
     if( tmp_buf == NULL )
     {
         ret = -ENOMEM;
-        goto end;
+        goto mtx_unlock;
     }
 
 
     if(copy_from_user(tmp_buf, buf, count))
     {
         ret = -EFAULT;
-        goto free_and_end;
+        goto free_and_unlock;
     }
 
  
@@ -139,56 +140,59 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
        i++;
     }
 
-    if( dev->buff_size == 0 )
+    if( dev->buffer_size == 0 )
     {
-        dev->buff_ptr = (char *)kmalloc(count, GFP_KERNEL);
-        if( dev->buff_ptr == NULL )
+        dev->buffer = (char *)kmalloc(count, GFP_KERNEL);
+        if( dev->buffer == NULL )
         {
             ret = -ENOMEM;
-            goto free_and_end;
+            goto free_and_unlock;
         }
-        memcpy(dev->buff_ptr, tmp_buf, count);
-        dev->buff_size += count;
+        memcpy(dev->buffer, tmp_buf, count);
+        dev->buffer_size += count;
     }
     else
     {
         int extra;
-        if(packet_flag)
-        {
-            extra = packet_len;
-        }
-        else
+        if(!packet_flag)
         {
             extra = count;
         }
-        dev->buff_ptr = (char *)krealloc(dev->buff_ptr, dev->buff_size + extra , GFP_KERNEL);
-        if( dev->buff_ptr == NULL )
+        else
+        {
+            extra = packet_len;
+        }
+        
+        dev->buffer = (char *)krealloc(dev->buffer, dev->buffer_size + extra , GFP_KERNEL);
+        
+        if( NULL == dev->buffer )
         {
             ret = -ENOMEM;
-            goto free_and_end;
+            goto free_and_unlock;
         }
-        memcpy(dev->buff_ptr + dev->buff_size, tmp_buf, extra);
-        dev->buff_size = dev->buff_size + extra;
+        memcpy(dev->buffer + dev->buffer_size, tmp_buf, extra);
+        
+        dev->buffer_size = dev->buffer_size + extra;
     }
 
     if(true == packet_flag)
     {
-        entry_buff.buffptr = dev->buff_ptr;
-        entry_buff.size = dev->buff_size;
+        entry_buff.buffptr = dev->buffer;
+        entry_buff.size = dev->buffer_size;
         ret_entry = aesd_circular_buffer_add_entry(&dev->c_buff, &entry_buff);
         if( ret_entry != NULL )
         {
             kfree(ret_entry);
         }
-        dev->buff_size = 0;
+        dev->buffer_size = 0;
     }
     
     ret = count;
     
-    free_and_end :
+    free_and_unlock :
     		kfree(tmp_buf);
-    end : 
-    		mutex_unlock(&aesd_device.lock);
+    mtx_unlock : 
+    		mutex_unlock(&aesd_device.mtx_lock);
     		
     return ret;
     
@@ -234,7 +238,7 @@ int aesd_init_module(void)
     
     memset(&aesd_device,0,sizeof(struct aesd_dev));
 
-    mutex_init(&aesd_device.lock);
+    mutex_init(&aesd_device.mtx_lock);
 
     result = aesd_setup_cdev(&aesd_device);
 
@@ -258,11 +262,10 @@ void aesd_cleanup_module(void)
     {
         kfree(buffer_element->buffptr);
     }
-    mutex_destroy(&aesd_device.lock);
+    mutex_destroy(&aesd_device.mtx_lock);
 
     unregister_chrdev_region(devno, 1);
 }
-
 
 
 module_init(aesd_init_module);
