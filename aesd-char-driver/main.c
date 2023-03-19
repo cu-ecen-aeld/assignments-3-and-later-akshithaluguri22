@@ -51,11 +51,12 @@ int aesd_release(struct inode *inode, struct file *filp)
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
+    ssize_t ret = 0;
     struct aesd_dev *dev;
-    struct aesd_buffer_entry *tmp_buf;
-    int tmp_buf_count = 0;
-    size_t offset_bytes;
+    struct aesd_buffer_entry *entry_buff;
+    int entry_count = 0;
+    size_t offs;
+    
     dev = filp->private_data;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     
@@ -65,48 +66,50 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
      
     mutex_lock(&aesd_device.lock);
     
-    tmp_buf = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->c_buff, *f_pos, &offset_bytes);
+    entry_buff = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->c_buff, *f_pos, &offs);
     
-    if( tmp_buf == NULL )
+    if( entry_buff == NULL )
     {
         *f_pos = 0;
-        goto cleanup;
+        goto exit;
     }
 
-    if( (tmp_buf->size - offset_bytes) < count )
+    if( count > (entry_buff->size - offs) )
     {
-        *f_pos += tmp_buf->size - offset_bytes;
-        tmp_buf_count = tmp_buf->size - offset_bytes;
+        *f_pos += entry_buff->size - offs;
+        entry_count = entry_buff->size - offs;
     }
     else
     {
         *f_pos += count;
-        tmp_buf_count = count;
+        entry_count = count;
     }
 
-    if( copy_to_user(buf, tmp_buf->buffptr+offset_bytes, tmp_buf_count))
+    if( copy_to_user(buf, entry_buff->buffptr+offs, entry_count))
     {
-        retval = -EFAULT;
-        goto cleanup;
+        ret = -EFAULT;
+        goto exit;
     }
 
-    retval = tmp_buf_count;
+    ret = entry_count;
 
-    cleanup : mutex_unlock(&aesd_device.lock);
+    exit : 
     
-    return retval;
+   	mutex_unlock(&aesd_device.lock);
+    
+    return ret;
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
+    ssize_t ret = 0;
     char *tmp_buf;
     bool packet_flag = false;
     struct aesd_dev *dev;
     int packet_len = 0;
     struct aesd_buffer_entry write_entry;
-    char *ret;
+    char *ret_entry;
     int i;
     
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
@@ -122,14 +125,14 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     tmp_buf = (char *)kmalloc(count, GFP_KERNEL);
     if( tmp_buf == NULL )
     {
-        retval = -ENOMEM;
+        ret = -ENOMEM;
         goto end;
     }
 
     // copy from user buffer to new buffer
     if(copy_from_user(tmp_buf, buf, count))
     {
-        retval = -EFAULT;
+        ret = -EFAULT;
         goto free_and_end;
     }
 
@@ -150,7 +153,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         dev->buff_ptr = (char *)kmalloc(count, GFP_KERNEL);
         if( dev->buff_ptr == NULL )
         {
-            retval = -ENOMEM;
+            ret = -ENOMEM;
             goto free_and_end;
         }
         memcpy(dev->buff_ptr, tmp_buf, count);
@@ -170,7 +173,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         dev->buff_ptr = (char *)krealloc(dev->buff_ptr, dev->buff_size + extra , GFP_KERNEL);
         if( dev->buff_ptr == NULL )
         {
-            retval = -ENOMEM;
+            ret = -ENOMEM;
             goto free_and_end;
         }
         memcpy(dev->buff_ptr + dev->buff_size, tmp_buf, extra);
@@ -182,17 +185,17 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     {
         write_entry.buffptr = dev->buff_ptr;
         write_entry.size = dev->buff_size;
-        ret = aesd_circular_buffer_add_entry(&dev->c_buff, &write_entry);
-        if( ret != NULL )
+        ret_entry = aesd_circular_buffer_add_entry(&dev->c_buff, &write_entry);
+        if( ret_entry != NULL )
         {
-            kfree(ret);
+            kfree(ret_entry);
         }
         dev->buff_size = 0;
     }
-    retval = count;
+    ret = count;
     free_and_end : kfree(tmp_buf);
     end : mutex_unlock(&aesd_device.lock);
-    return retval;
+    return ret;
     
 }
 struct file_operations aesd_fops = {
