@@ -17,7 +17,13 @@
 
 #define PORT ("9000")
 #define TEMP_BUFFER_SIZE (3)
+#define USE_AESD_CHAR_DEVICE
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define AESDSOCKET_FILEPATH ("/dev/aesdchar")
+#else
 #define AESDSOCKET_FILEPATH ("/var/tmp/aesdsocketdata")
+#endif
 
 int server_socket_fd, client_socket_fd, aesdsocketdata_fd;
 bool closed_flag = false;
@@ -285,9 +291,11 @@ int main(int argc, char *argv[]){
 	//signal handlers
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
-	signal(SIGALRM, signal_handler);
-
-
+#ifdef USE_AESD_CHAR_DEVICE
+#else
+signal(SIGALRM, signal_handler);
+#endif
+	
 	//hints
     	memset(&hints, 0, sizeof(hints));    
     	hints.ai_family = AF_INET;        
