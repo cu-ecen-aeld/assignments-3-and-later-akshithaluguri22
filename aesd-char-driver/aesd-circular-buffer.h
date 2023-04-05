@@ -18,11 +18,6 @@
 
 #define AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED 10
 
-#define MOVE_BUFFPTR(x) ((x + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
-
-/*******************************/
-
-
 struct aesd_buffer_entry
 {
     /**
