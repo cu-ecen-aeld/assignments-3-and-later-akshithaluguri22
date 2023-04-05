@@ -18,6 +18,11 @@
 
 #define AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED 10
 
+#define MOVE_BUFFPTR(x) ((x + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+
+/*******************************/
+
+
 struct aesd_buffer_entry
 {
     /**
@@ -49,6 +54,9 @@ struct aesd_circular_buffer
      * set to true when the buffer entry structure is full
      */
     bool full;
+
+    int total_buff_size;
+
 };
 
 extern struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
