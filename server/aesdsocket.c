@@ -14,6 +14,7 @@
 #include <syslog.h>
 #include <pthread.h>
 #include <time.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT ("9000")
 #define TEMP_BUFFER_SIZE (3)
@@ -23,13 +24,14 @@
 #define AESDSOCKET_FILEPATH ("/dev/aesdchar")
 #else
 #define AESDSOCKET_FILEPATH ("/var/tmp/aesdsocketdata")
-#endif
-
-int server_socket_fd, client_socket_fd, aesdsocketdata_fd;
-bool closed_flag = false;
 bool elapsed_10sec = false;
-timer_t timer;
 pthread_mutex_t mutex;
+timer_t timer;
+#endif
+int server_socket_fd, client_socket_fd;
+bool closed_flag = false;
+
+const char* ioctl_string = "AESDCHAR_IOCSEEKTO:";
 
 typedef struct 
 {
@@ -45,6 +47,7 @@ typedef struct ll_node
     struct ll_node *next;
 } NODE;
 
+#ifndef USE_AESD_CHAR_DEVICE
 int init_timer(void){
 
     int status= timer_create(CLOCK_REALTIME, NULL, &timer);
@@ -91,6 +94,7 @@ void timer_10_sec(void)
     pthread_mutex_unlock(&mutex);
 
 }
+#endif
 
 int node_insert( NODE **head, NODE *new_thread)
 {
@@ -110,21 +114,24 @@ void signal_handler(int signum)
 		printf("SIGINT or SIGTERM occured\n");
 		closed_flag = true;
     	}
+    	#ifndef USE_AESD_CHAR_DEVICE
     	else if(signum == SIGALRM)
     	{
         	syslog(LOG_DEBUG, "SIGALRM signal recevied\n");
         	elapsed_10sec = true;
     	}
+    	#endif
 
 }
 
 void cleanup()
 {
     close(server_socket_fd);
-    close(aesdsocketdata_fd);
     unlink(AESDSOCKET_FILEPATH);
+    #ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_destroy(&mutex);
     timer_delete(timer);
+    #endif
     closelog();
     exit(0);
 }
@@ -142,7 +149,6 @@ void *new_thread_fn( void *t_parameters )
     int recv_buff_len = 0;
     int prev_len = TEMP_BUFFER_SIZE;
     char *recieved_packets;
-    int status=0;
     
     client_ip = inet_ntop(AF_INET, &p->sin_addr, address_string, sizeof(address_string));
     syslog(LOG_DEBUG, "Connected with %s\n\r",client_ip ); 
@@ -202,21 +208,48 @@ void *new_thread_fn( void *t_parameters )
         count++;
     }
 
-    lseek(aesdsocketdata_fd, 0, SEEK_END);
+//    lseek(aesdsocketdata_fd, 0, SEEK_END);
 
-    status = pthread_mutex_lock(&mutex);
+#ifndef USE_AESD_CHAR_DEVICE
+    int status = pthread_mutex_lock(&mutex);
     if( status != 0 )
     {
         perror("mutex lock");
     }
-    status= write(aesdsocketdata_fd, recieved_packets, recv_buff_len );
-    if( -1 == status)
+#endif
+	//open the socket data file
+	int aesdsocketdata_fd= open(AESDSOCKET_FILEPATH,O_RDWR | O_CREAT | O_APPEND,0666);
+
+	if( -1 == aesdsocketdata_fd ){
+	
+		syslog(LOG_ERR, "not able to open file %s",AESDSOCKET_FILEPATH);
+		
+	}
+	
+    if(0 == strncmp(recieved_packets, ioctl_string, strlen(ioctl_string)))
     {
-        syslog(LOG_ERR, "write failed\n");
-        printf("write failed\n");
+        struct aesd_seekto seek_info; 
+        
+        sscanf(recieved_packets, "AESDCHAR_IOCSEEKTO:%d,%d", &seek_info.write_cmd, &seek_info.write_cmd_offset);
+        
+        if( ioctl(aesdsocketdata_fd, AESDCHAR_IOCSEEKTO, &seek_info))
+        {
+            syslog(LOG_ERR, "Ioctl %d", errno);
+        }
     }
+    else
+    {
+        if(-1 == write(aesdsocketdata_fd, recieved_packets, recv_buff_len))
+        {
+            syslog(LOG_ERR, "write");
+        }
+    }
+    
     memset(temp_buffer, '\0', TEMP_BUFFER_SIZE);
+    
+    #ifndef USE_AESD_CHAR_DEVICE
     lseek(aesdsocketdata_fd, 0, SEEK_SET);
+    #endif
     
     int read_bytes;
     char *recv_buffer = (char *)malloc(TEMP_BUFFER_SIZE);
@@ -237,11 +270,14 @@ void *new_thread_fn( void *t_parameters )
             break;
         }
     }
+    close(aesdsocketdata_fd);
+    #ifndef USE_AESD_CHAR_DEVICE
     status = pthread_mutex_unlock(&mutex);
     if( status!=0 )
     {
         syslog(LOG_ERR, "mutex unlock failed");
     }
+    #endif
     
     if(read_bytes == -1)
     {
@@ -256,6 +292,8 @@ void *new_thread_fn( void *t_parameters )
     syslog(LOG_DEBUG, "Closed with %s\n\r",client_ip ); 
     return 0;
 }
+
+
 int main(int argc, char *argv[]){
 
 	bool daemon_process=false;
@@ -279,14 +317,7 @@ int main(int argc, char *argv[]){
 		printf("Daemon failed");
 	}
 
-	//open the socket data file
-	aesdsocketdata_fd= open(AESDSOCKET_FILEPATH,O_RDWR | O_CREAT | O_APPEND,0666);
 
-	if( -1 == aesdsocketdata_fd ){
-	
-		syslog(LOG_ERR, "not able to open file %s",AESDSOCKET_FILEPATH);
-		return -1;
-	}
 
 	//signal handlers
 	signal(SIGINT, signal_handler);
@@ -355,24 +386,29 @@ signal(SIGALRM, signal_handler);
 	freeaddrinfo(server_info);
 	addr_size = sizeof Client_addr;
 	
+	#ifndef USE_AESD_CHAR_DEVICE
  	status= init_timer();
     	if(status == -1)
     	{
     	    perror("timer init failed");
     	}
-	
+    	
     	pthread_mutex_init(&mutex, NULL);
+	#endif
+	
 	
     	NODE *head =NULL;
     	NODE *prev,*current;
     
 	while(!closed_flag)
 	{
+	#ifndef USE_AESD_CHAR_DEVICE
 		if(elapsed_10sec)
         	{
             		elapsed_10sec = false;
             		timer_10_sec();
         	}
+        #endif
         	
 		status=0;
 		

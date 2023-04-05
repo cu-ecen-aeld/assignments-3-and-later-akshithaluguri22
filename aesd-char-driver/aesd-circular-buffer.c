@@ -34,34 +34,15 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     */
     
 	int count = 0;
-	bool entry = false;
     	int position = buffer->out_offs;
-
-	if  (true == buffer->full)
+	char_offset = char_offset+1;
+	
+	while(count<AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
 	{
-		count = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-	}	
-	else
-	{
-		if(buffer->out_offs < buffer->in_offs)
+		if(buffer->entry[position].size >= char_offset)
 		{
-			count = buffer->out_offs - buffer->in_offs;
-		}
-		else if ( buffer->out_offs > buffer->in_offs)
-		{
-			count = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED +1 + buffer->out_offs - buffer->in_offs ;
-		}
-		else{
-			return NULL;
-		}
-	}
-
-	while(count && !entry)
-	{
-		if(buffer->entry[position].size >= char_offset + 1)
-		{
-			*entry_offset_byte_rtn = char_offset;
-			entry = true;
+			*entry_offset_byte_rtn = char_offset-1;
+			
 			return &buffer->entry[position];
 		}
 		
@@ -69,12 +50,14 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 		{
 			char_offset -= buffer->entry[position].size;
 		}
-		count--;
+		
+		count++;
 		position++;
 		position %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
 	}
 	
 	return NULL;
+
 }
 
 /**
@@ -95,14 +78,19 @@ char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const 
     if(true == buffer->full)
     {
     	returnchar_ptr = (char *)buffer->entry[buffer->in_offs].buffptr;
+
+    	buffer->total_buff_size -= buffer->entry[buffer->in_offs].size;	
     	buffer->entry[buffer->in_offs] = *add_entry;
+    	buffer->total_buff_size += add_entry->size;
     	buffer->in_offs++;
     	buffer->in_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     	buffer->out_offs++;
     	buffer->out_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
-    else{
+    else
+    {
     	buffer->entry[buffer->in_offs] = *add_entry;
+    	buffer->total_buff_size += add_entry->size;
     	buffer->in_offs++;
     	buffer->in_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;    	
     
